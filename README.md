@@ -15,3 +15,8 @@ GET `/api/jobs/ID` para status.
 GET `/api/jobs/ID/videos/VIDEO_ID` para baixar.
 
 Esta é a primeira versão do motor. O objetivo é medir a velocidade do FFmpeg nativo antes de conectar o editor completo.
+
+
+## V2 — compatibilidade Blitz
+
+A imagem agora cria e usa o usuário não-root `appuser`, conforme a exigência do Blitz.cloud.

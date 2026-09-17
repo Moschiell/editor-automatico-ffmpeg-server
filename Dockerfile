@@ -1,9 +1,25 @@
 FROM node:20-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
+
 COPY package*.json ./
 RUN npm install --omit=dev
+
 COPY server.js ./
-ENV NODE_ENV=production PORT=3000
+
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /app/data/uploads /app/data/outputs \
+    && chown -R appuser:appuser /app
+
+USER appuser
+
+ENV NODE_ENV=production
+ENV PORT=3000
+
 EXPOSE 3000
-CMD ["npm","start"]
+
+CMD ["npm", "start"]
