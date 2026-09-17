@@ -2,7 +2,8 @@ FROM node:20-bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /usr/sbin/nologin appuser
 
 WORKDIR /app
 
@@ -11,8 +12,7 @@ RUN npm install --omit=dev
 
 COPY server.js ./
 
-RUN useradd --create-home --uid 10001 appuser \
-    && mkdir -p /app/data/uploads /app/data/outputs \
+RUN mkdir -p /app/data/uploads /app/data/outputs \
     && chown -R appuser:appuser /app
 
 USER appuser
