@@ -72,14 +72,17 @@ function render(input, output, opts = {}, label = '') {
     const speed = Math.max(0.5, Math.min(2, Number.isFinite(speedRaw) && speedRaw > 0 ? speedRaw : 1));
     const mirror = opts.mirror === 'true';
 
-    const src = mirror ? '[0:v]hflip[src]' : '[0:v]null[src]';
-    const pts = speed === 1 ? '[src]' : '[src]setpts=PTS/' + speed + '[src2]';
-    const baseLabel = speed === 1 ? 'src' : 'src2';
+    // Preparação do vídeo. O mesmo fluxo é DIVIDIDO em duas cópias antes
+    // das escalas: uma para o fundo desfocado e outra para o vídeo principal.
+    // Isso evita o erro do FFmpeg \"Invalid stream specifier\" que ocorria
+    // quando a mesma etiqueta era consumida duas vezes.
+    const transform = mirror ? 'hflip' : 'null';
+    const pts = speed === 1 ? '' : `,setpts=PTS/${speed}`;
 
-    // Canvas vertical 720x1280, com fundo ampliado e desfocado e vídeo preservando proporção.
-    const filter = `${src};${pts};` +
-      `[${baseLabel}]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,gblur=sigma=18[bg];` +
-      `[${baseLabel}]scale=720:1280:force_original_aspect_ratio=decrease[fg];` +
+    // Canvas vertical 720x1280, com fundo ampliado/desfocado e vídeo preservando proporção.
+    const filter = `[0:v]${transform}${pts},split=2[bg0][fg0];` +
+      `[bg0]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,gblur=sigma=18[bg];` +
+      `[fg0]scale=720:1280:force_original_aspect_ratio=decrease[fg];` +
       `[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[out]`;
 
     const args = [
@@ -137,8 +140,8 @@ function render(input, output, opts = {}, label = '') {
 app.get('/', (_req, res) => {
   res.send(`<!doctype html>
 <html lang="pt-BR"><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Editor Automático V5</title></head><body>
-<h1>Editor Automático V5</h1>
+<title>Editor Automático V6</title></head><body>
+<h1>Editor Automático V6</h1>
 <p>Servidor FFmpeg nativo online.</p>
 <p><a href="/health">Verificar /health</a></p>
 </body></html>`);
@@ -148,7 +151,7 @@ app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'editor-automatico-ffmpeg',
-    version: 'v5',
+    version: 'v6',
     ffmpeg: 'native',
     time: new Date().toISOString()
   });
@@ -314,7 +317,7 @@ process.on('SIGINT', () => {
 });
 
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`FFmpeg server V5 listening on ${PORT}`);
+  console.log(`FFmpeg server V6 listening on ${PORT}`);
   console.log(`Node ${process.version}`);
 });
 
