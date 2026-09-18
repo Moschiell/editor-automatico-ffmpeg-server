@@ -1,330 +1,74 @@
-const express = require('express');
-const multer = require('multer');
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { spawn } = require('child_process');
-
-const app = express();
-const PORT = Number(process.env.PORT || 3000);
-
-const base = path.join(__dirname, 'data');
-const uploads = path.join(base, 'uploads');
-const outputs = path.join(base, 'outputs');
-for (const dir of [base, uploads, outputs]) fs.mkdirSync(dir, { recursive: true });
-
-const jobs = new Map();
-const MAX_FILES = 5;
-const MAX_FILE_SIZE = 500 * 1024 * 1024;
-
-const allowedExt = new Set(['.mp4', '.mov', '.webm', '.mkv', '.m4v', '.avi']);
-const allowedMime = /^(video\/|application\/octet-stream$)/i;
-
-function uid() {
-  return crypto.randomBytes(10).toString('hex');
-}
-
-function safeUnlink(filePath) {
-  try {
-    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  } catch (e) {
-    console.error('[cleanup] erro ao remover', filePath, e.message);
-  }
-}
-
-function fileLooksLikeVideo(file) {
-  const ext = path.extname(file.originalname || '').toLowerCase();
-  return allowedExt.has(ext) || allowedMime.test(file.mimetype || '');
-}
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploads),
-  filename: (_req, file, cb) => cb(null, `${uid()}-${path.basename(file.originalname || 'video')}`)
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: MAX_FILE_SIZE, files: MAX_FILES },
-  fileFilter: (_req, file, cb) => {
-    // Android/Chrome pode enviar MIME vazio ou diferente do esperado.
-    // Por isso a extensão também é aceita.
-    if (fileLooksLikeVideo(file)) return cb(null, true);
-    console.warn('[upload] arquivo rejeitado:', {
-      name: file.originalname,
-      mime: file.mimetype
-    });
-    return cb(new Error(`Formato não reconhecido: ${file.originalname || 'arquivo'}`));
-  }
-});
-
+const express=require('express');
+const multer=require('multer');
+const fs=require('fs');
+const path=require('path');
+const crypto=require('crypto');
+const {spawn}=require('child_process');
+const app=express();
+const PORT=Number(process.env.PORT||3000);
+const base=path.join(__dirname,'data'),uploads=path.join(base,'uploads'),outputs=path.join(base,'outputs');
+for(const d of [base,uploads,outputs])fs.mkdirSync(d,{recursive:true});
+const jobs=new Map(); const MAX_FILES=5, MAX_FILE_SIZE=500*1024*1024;
+const allowedExt=new Set(['.mp4','.mov','.webm','.mkv','.m4v','.avi']);
+function uid(){return crypto.randomBytes(10).toString('hex')}
+function safeUnlink(p){try{if(p&&fs.existsSync(p))fs.unlinkSync(p)}catch(e){console.error('[cleanup]',e.message)}}
+function isVideo(f){return allowedExt.has(path.extname(f.originalname||'').toLowerCase())||/^video\//i.test(f.mimetype||'')||f.mimetype==='application/octet-stream'}
+const storage=multer.diskStorage({destination:(_r,_f,cb)=>cb(null,uploads),filename:(_r,f,cb)=>cb(null,`${uid()}-${path.basename(f.originalname||'file')}`)});
+const upload=multer({storage,limits:{fileSize:MAX_FILE_SIZE,files:MAX_FILES+1},fileFilter:(_r,f,cb)=>cb(isVideo(f)?null:new Error(`Formato não reconhecido: ${f.originalname||'arquivo'}`))});
 app.disable('x-powered-by');
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  next();
-});
-
-function render(input, output, opts = {}, label = '') {
-  return new Promise((resolve, reject) => {
-    const speedRaw = Number(opts.speed);
-    const speed = Math.max(0.5, Math.min(2, Number.isFinite(speedRaw) && speedRaw > 0 ? speedRaw : 1));
-    const mirror = opts.mirror === 'true';
-
-    // Preparação do vídeo. O mesmo fluxo é DIVIDIDO em duas cópias antes
-    // das escalas: uma para o fundo desfocado e outra para o vídeo principal.
-    // Isso evita o erro do FFmpeg \"Invalid stream specifier\" que ocorria
-    // quando a mesma etiqueta era consumida duas vezes.
-    const transform = mirror ? 'hflip' : 'null';
-    const pts = speed === 1 ? '' : `,setpts=PTS/${speed}`;
-
-    // Canvas vertical 720x1280, com fundo ampliado/desfocado e vídeo preservando proporção.
-    const filter = `[0:v]${transform}${pts},split=2[bg0][fg0];` +
-      `[bg0]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,gblur=sigma=18[bg];` +
-      `[fg0]scale=720:1280:force_original_aspect_ratio=decrease[fg];` +
-      `[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[out]`;
-
-    const args = [
-      '-hide_banner',
-      '-loglevel', 'error',
-      '-i', input,
-      '-filter_complex', filter,
-      '-map', '[out]',
-      '-map', '0:a?',
-      '-c:v', 'libx264',
-      '-preset', 'veryfast',
-      '-crf', '23'
-    ];
-
-    if (speed !== 1) {
-      args.push('-filter:a', `atempo=${speed}`);
-    }
-
-    args.push(
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-movflags', '+faststart',
-      '-y', output
-    );
-
-    console.log(`[ffmpeg] INÍCIO ${label}`, { speed, mirror, input, output });
-    const started = Date.now();
-    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderr = '';
-
-    child.stderr.on('data', chunk => {
-      stderr += chunk.toString();
-      if (stderr.length > 12000) stderr = stderr.slice(-12000);
-    });
-
-    child.on('error', err => {
-      console.error(`[ffmpeg] ERRO DE PROCESSO ${label}:`, err.message);
-      reject(err);
-    });
-
-    child.on('close', code => {
-      const seconds = ((Date.now() - started) / 1000).toFixed(1);
-      if (code === 0) {
-        console.log(`[ffmpeg] FIM ${label} OK em ${seconds}s`);
-        resolve();
-      } else {
-        const message = stderr.trim() || `FFmpeg terminou com código ${code}`;
-        console.error(`[ffmpeg] FIM ${label} FALHOU em ${seconds}s:`, message);
-        reject(new Error(message));
-      }
-    });
-  });
+app.use((req,res,next)=>{res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type');if(req.method==='OPTIONS')return res.sendStatus(204);next()});
+function escText(s){return String(s||'').replace(/\\/g,'\\\\').replace(/:/g,'\\:').replace(/'/g,"\\'").replace(/%/g,'\\%').replace(/,/g,'\\,').replace(/\[/g,'\\[').replace(/\]/g,'\\]')}
+function normColor(c,def){return /^0x[0-9a-fA-F]{8}$/.test(c||'')?c:def}
+function buildFilter(opts,hasLogo){
+ const speed=Math.max(.5,Math.min(2,Number(opts.speed)||1));
+ const mirror=opts.mirror==='true';
+ const transform=(mirror?'hflip':'null')+(speed===1?'':`,setpts=PTS/${speed}`);
+ const parts=[`[0:v]${transform},split=2[bg0][fg0]`,`[bg0]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,gblur=sigma=22[bg]`,`[fg0]scale=680:1200:force_original_aspect_ratio=decrease[fg]`,`[bg][fg]overlay=(W-w)/2:120[base]`];
+ const template=opts.template||'news-card';
+ let last='base';
+ if(template==='news-card'){
+   const title=escText(opts.headline), caption=escText(opts.caption), handle=escText(opts.handle);
+   if(title) {parts.push(`[${last}]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${title}':fontcolor=white:fontsize=42:line_spacing=8:x=38:y=34:box=1:boxcolor=0x000000B3:boxborderw=14[title]`);last='title'}
+   if(caption) {parts.push(`[${last}]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${caption}':fontcolor=white:fontsize=32:line_spacing=7:x=38:y=1135:box=1:boxcolor=0x000000B3:boxborderw=14[cap]`);last='cap'}
+   if(handle) {parts.push(`[${last}]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${handle}':fontcolor=white:fontsize=26:x=38:y=1240:box=1:boxcolor=0x00000099:boxborderw=8[hdl]`);last='hdl'}
+ } else if(template==='clean') {
+   const caption=escText(opts.caption),handle=escText(opts.handle);
+   if(caption){parts.push(`[${last}]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${caption}':fontcolor=white:fontsize=34:line_spacing=7:x=36:y=1140:box=1:boxcolor=0x000000A6:boxborderw=12[cap]`);last='cap'}
+   if(handle){parts.push(`[${last}]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${handle}':fontcolor=white:fontsize=25:x=36:y=1242[hdl]`);last='hdl'}
+ } else if(template==='headline') {
+   const title=escText(opts.headline),caption=escText(opts.caption);
+   if(title){parts.push(`[${last}]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${title}':fontcolor=white:fontsize=40:x=36:y=35:box=1:boxcolor=0x000000B8:boxborderw=12[t]`);last='t'}
+   if(caption){parts.push(`[${last}]drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='${caption}':fontcolor=white:fontsize=30:x=36:y=1145:box=1:boxcolor=0x000000B8:boxborderw=12[c]`);last='c'}
+ }
+ if(hasLogo){parts.push(`[1:v]scale=${Math.max(40,Math.min(260,Number(opts.logoSize)||120))}:-1[logo]`,`[${last}][logo]overlay=W-w-24:24[wm]`);last='wm'}
+ parts.push(`[${last}]format=yuv420p[out]`); return parts.join(';');
 }
-
-app.get('/', (_req, res) => {
-  res.send(`<!doctype html>
-<html lang="pt-BR"><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Editor Automático V6</title></head><body>
-<h1>Editor Automático V6</h1>
-<p>Servidor FFmpeg nativo online.</p>
-<p><a href="/health">Verificar /health</a></p>
-</body></html>`);
-});
-
-app.get('/health', (_req, res) => {
-  res.json({
-    ok: true,
-    service: 'editor-automatico-ffmpeg',
-    version: 'v6',
-    ffmpeg: 'native',
-    time: new Date().toISOString()
-  });
-});
-
-app.post('/api/jobs', (req, res, next) => {
-  console.log('[api] POST /api/jobs recebido');
-  upload.array('videos', MAX_FILES)(req, res, async err => {
-    if (err) return next(err);
-
-    const files = req.files || [];
-    console.log('[upload] resultado:', files.map(f => ({
-      name: f.originalname,
-      mime: f.mimetype,
-      size: f.size,
-      path: f.path
-    })));
-
-    if (!files.length) {
-      return res.status(400).json({
-        error: 'Nenhum vídeo enviado. O campo multipart esperado é "videos".',
-        receivedFiles: 0
-      });
-    }
-
-    const id = uid();
-    const job = {
-      id,
-      status: 'processing',
-      total: files.length,
-      completed: 0,
-      failed: 0,
-      createdAt: Date.now(),
-      videos: [],
-      options: {
-        headline: String(req.body?.headline || ''),
-        handle: String(req.body?.handle || ''),
-        mirror: String(req.body?.mirror || 'false'),
-        speed: String(req.body?.speed || '1')
-      }
-    };
-
-    jobs.set(id, job);
-    console.log(`[job ${id}] CRIADO com ${files.length} vídeo(s)`, job.options);
-
-    // Respondemos imediatamente; o processamento continua em segundo plano.
-    res.status(202).json({
-      id,
-      status: job.status,
-      total: job.total,
-      statusUrl: `/api/jobs/${id}`
-    });
-
-    (async () => {
-      for (const file of files) {
-        const vid = uid();
-        const out = path.join(outputs, `${id}-${vid}.mp4`);
-        const item = {
-          id: vid,
-          name: path.basename(file.originalname || 'video'),
-          status: 'processing'
-        };
-        job.videos.push(item);
-
-        try {
-          await render(file.path, out, job.options, `${id}/${vid}`);
-          if (!fs.existsSync(out)) throw new Error('FFmpeg terminou sem criar o arquivo de saída.');
-          item.status = 'done';
-          item.downloadUrl = `/api/jobs/${id}/videos/${vid}`;
-          job.completed++;
-          console.log(`[job ${id}] vídeo ${vid} CONCLUÍDO (${job.completed}/${job.total})`);
-        } catch (e) {
-          item.status = 'error';
-          item.error = e.message || 'Erro desconhecido no FFmpeg.';
-          job.failed++;
-          console.error(`[job ${id}] vídeo ${vid} FALHOU:`, item.error);
-        } finally {
-          safeUnlink(file.path);
-        }
-      }
-
-      job.status = job.failed > 0 ? 'finished_with_errors' : 'done';
-      job.finishedAt = Date.now();
-      console.log(`[job ${id}] FINALIZADO: ${job.status} — ${job.completed}/${job.total}`);
-    })().catch(e => {
-      job.status = 'error';
-      job.error = e.message || 'Erro interno no processamento.';
-      job.finishedAt = Date.now();
-      console.error(`[job ${id}] ERRO FATAL:`, e);
-    });
-  });
-});
-
-app.get('/api/jobs/:id', (req, res) => {
-  const job = jobs.get(req.params.id);
-  if (!job) {
-    console.warn(`[api] GET /api/jobs/${req.params.id} -> 404 (lote não encontrado na memória)`);
-    return res.status(404).json({
-      error: 'Lote não encontrado. O servidor pode ter sido reiniciado antes da consulta.'
-    });
-  }
-  res.json({
-    id: job.id,
-    status: job.status,
-    total: job.total,
-    completed: job.completed,
-    failed: job.failed,
-    videos: job.videos,
-    createdAt: job.createdAt,
-    finishedAt: job.finishedAt || null,
-    error: job.error || null
-  });
-});
-
-app.get('/api/jobs/:id/videos/:vid', (req, res) => {
-  const job = jobs.get(req.params.id);
-  if (!job) return res.status(404).json({ error: 'Lote não encontrado. O servidor pode ter sido reiniciado.' });
-
-  const video = job.videos.find(v => v.id === req.params.vid);
-  if (!video || video.status !== 'done') {
-    return res.status(404).json({ error: 'Vídeo ainda não está pronto.' });
-  }
-
-  const filePath = path.join(outputs, `${job.id}-${video.id}.mp4`);
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'Arquivo de saída não está mais disponível no armazenamento temporário.' });
-  }
-
-  console.log(`[download] ${job.id}/${video.id}`);
-  res.download(filePath, `editor-automatico-${video.id}.mp4`);
-});
-
-// Limpeza de jobs antigos. Arquivos ficam apenas enquanto o job existir.
-setInterval(() => {
-  const cut = Date.now() - 30 * 60 * 1000;
-  for (const [id, job] of jobs) {
-    if (job.createdAt < cut) {
-      for (const v of job.videos) {
-        safeUnlink(path.join(outputs, `${id}-${v.id}.mp4`));
-      }
-      jobs.delete(id);
-      console.log(`[cleanup] lote removido: ${id}`);
-    }
-  }
-}, 5 * 60 * 1000).unref();
-
-// Encerramento limpo quando o Render envia SIGTERM.
-let shuttingDown = false;
-process.on('SIGTERM', () => {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  console.log('[process] SIGTERM recebido — encerrando servidor HTTP. Jobs em andamento podem ser interrompidos pelo Render.');
-  server.close(() => {
-    console.log('[process] servidor HTTP encerrado.');
-    process.exit(0);
-  });
-  setTimeout(() => process.exit(0), 25000).unref();
-});
-
-process.on('SIGINT', () => {
-  console.log('[process] SIGINT recebido.');
-  server.close(() => process.exit(0));
-});
-
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`FFmpeg server V6 listening on ${PORT}`);
-  console.log(`Node ${process.version}`);
-});
-
-app.use((err, _req, res, _next) => {
-  console.error('[api] ERRO:', err);
-  if (err instanceof multer.MulterError) {
-    return res.status(400).json({ error: `Erro no upload: ${err.message}`, code: err.code });
-  }
-  return res.status(400).json({ error: err.message || 'Erro interno.' });
-});
+function render(input,output,opts,label,logoPath){return new Promise((resolve,reject)=>{
+ const speed=Math.max(.5,Math.min(2,Number(opts.speed)||1));
+ const filter=buildFilter(opts,!!logoPath);
+ const args=['-hide_banner','-loglevel','error','-i',input];
+ if(logoPath) args.push('-i',logoPath);
+ args.push('-filter_complex',filter,'-map','[out]','-map','0:a?','-c:v','libx264','-preset','veryfast','-crf','23');
+ if(speed!==1)args.push('-filter:a',`atempo=${speed}`);
+ args.push('-c:a','aac','-b:a','128k','-movflags','+faststart','-y',output);
+ console.log(`[ffmpeg] INÍCIO ${label}`,{template:opts.template,hasLogo:!!logoPath,speed});const started=Date.now();
+ const p=spawn('ffmpeg',args,{stdio:['ignore','ignore','pipe']});let err='';p.stderr.on('data',d=>{err+=d.toString();if(err.length>15000)err=err.slice(-15000)});
+ p.on('error',reject);p.on('close',c=>{const sec=((Date.now()-started)/1000).toFixed(1);if(c===0){console.log(`[ffmpeg] FIM ${label} OK em ${sec}s`);resolve()}else{console.error(`[ffmpeg] FIM ${label} FALHOU em ${sec}s:`,err);reject(new Error(err||`FFmpeg código ${c}`))}})
+})}
+app.get('/',(_q,s)=>s.send('<h1>Editor Automático V7</h1><p>Servidor FFmpeg nativo.</p><p><a href="/health">/health</a></p>'));
+app.get('/health',(_q,s)=>s.json({ok:true,service:'editor-automatico-ffmpeg',version:'v7',ffmpeg:'native',time:new Date().toISOString()}));
+app.post('/api/jobs',(req,res,next)=>{console.log('[api] POST /api/jobs recebido');upload.fields([{name:'videos',maxCount:MAX_FILES},{name:'watermark',maxCount:1}])(req,res,async err=>{
+ if(err)return next(err);const files=req.files?.videos||[], wm=req.files?.watermark?.[0];
+ console.log('[upload] vídeos:',files.map(f=>({name:f.originalname,mime:f.mimetype,size:f.size,path:f.path}))); if(wm)console.log('[upload] marca d\'água:',{name:wm.originalname,mime:wm.mimetype,size:wm.size,path:wm.path});
+ if(!files.length){if(wm)safeUnlink(wm.path);return res.status(400).json({error:'Nenhum vídeo enviado.',receivedFiles:0})}
+ let options={template:String(req.body?.template||'news-card'),headline:String(req.body?.headline||''),caption:String(req.body?.caption||''),handle:String(req.body?.handle||''),mirror:String(req.body?.mirror||'false'),speed:String(req.body?.speed||'1'),logoSize:String(req.body?.logoSize||'120')};
+ const id=uid(),job={id,status:'processing',total:files.length,completed:0,failed:0,createdAt:Date.now(),videos:[],options};jobs.set(id,job);console.log(`[job ${id}] CRIADO`,options);
+ res.status(202).json({id,status:job.status,total:job.total,statusUrl:`/api/jobs/${id}`});
+ (async()=>{for(const file of files){const vid=uid(),out=path.join(outputs,`${id}-${vid}.mp4`),item={id:vid,name:path.basename(file.originalname||'video'),status:'processing'};job.videos.push(item);try{await render(file.path,out,options,`${id}/${vid}`,wm?.path);item.status='done';item.downloadUrl=`/api/jobs/${id}/videos/${vid}`;job.completed++;}catch(e){item.status='error';item.error=e.message;job.failed++;}finally{safeUnlink(file.path)} } if(wm)safeUnlink(wm.path);job.status=job.failed?'finished_with_errors':'done';job.finishedAt=Date.now();console.log(`[job ${id}] FINALIZADO: ${job.status} — ${job.completed}/${job.total}`)})().catch(e=>{job.status='error';job.error=e.message;job.finishedAt=Date.now();if(wm)safeUnlink(wm.path);console.error(`[job ${id}] FATAL`,e)})
+ })});
+app.get('/api/jobs/:id',(req,res)=>{const j=jobs.get(req.params.id);if(!j)return res.status(404).json({error:'Lote não encontrado. O servidor pode ter sido reiniciado.'});res.json({id:j.id,status:j.status,total:j.total,completed:j.completed,failed:j.failed,videos:j.videos,options:j.options,createdAt:j.createdAt,finishedAt:j.finishedAt||null,error:j.error||null})});
+app.get('/api/jobs/:id/videos/:vid',(req,res)=>{const j=jobs.get(req.params.id);if(!j)return res.status(404).json({error:'Lote não encontrado.'});const v=j.videos.find(x=>x.id===req.params.vid);if(!v||v.status!=='done')return res.status(404).json({error:'Vídeo ainda não está pronto.'});const f=path.join(outputs,`${j.id}-${v.id}.mp4`);if(!fs.existsSync(f))return res.status(404).json({error:'Arquivo não encontrado.'});res.download(f,`editor-automatico-${v.id}.mp4`)});
+setInterval(()=>{const cut=Date.now()-30*60*1000;for(const[id,j]of jobs)if(j.createdAt<cut){j.videos.forEach(v=>safeUnlink(path.join(outputs,`${id}-${v.id}.mp4`)));jobs.delete(id)}},5*60*1000).unref();
+let server;function shutdown(){if(!server)return;console.log('[process] encerrando');server.close(()=>process.exit(0));setTimeout(()=>process.exit(0),25000).unref()}process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
+server=app.listen(PORT,'0.0.0.0',()=>console.log(`FFmpeg server V7 listening on ${PORT}`));
+app.use((err,_q,res,_n)=>{console.error('[api] ERRO:',err);if(err instanceof multer.MulterError)return res.status(400).json({error:`Erro no upload: ${err.message}`,code:err.code});res.status(400).json({error:err.message||'Erro interno.'})});
