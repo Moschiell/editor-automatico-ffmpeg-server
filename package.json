@@ -1,1 +1,1 @@
-{"name":"editor-automatico-ffmpeg-server","version":"7.6.0","private":true,"dependencies":{"express":"^5.1.0","multer":"^2.0.2"},"scripts":{"start":"node server.js"}}
+{"name":"editor-automatico-ffmpeg-server","version":"7.9.0","private":true,"dependencies":{"express":"^5.1.0","multer":"^2.0.2"},"scripts":{"start":"node server.js"}}
