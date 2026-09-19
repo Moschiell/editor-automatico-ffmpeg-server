@@ -1,14 +1,1 @@
-{
-  "name": "editor-automatico-ffmpeg-server",
-  "version": "5.0.0",
-  "private": true,
-  "description": "Backend FFmpeg nativo para o Editor Automático",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "dependencies": {
-    "express": "^4.21.2",
-    "multer": "^1.4.5-lts.1"
-  }
-}
+{"name":"editor-automatico-ffmpeg-server","version":"7.6.0","private":true,"dependencies":{"express":"^5.1.0","multer":"^2.0.2"},"scripts":{"start":"node server.js"}}

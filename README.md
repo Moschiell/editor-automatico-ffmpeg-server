@@ -1,15 +1,13 @@
-# Editor Automático — servidor V7
-Servidor Node/Express + FFmpeg nativo para o editor web.
+# Editor Automático — servidor FFmpeg V7.6
 
-## Campos multipart
-- videos: até 5 vídeos
-- watermark: imagem opcional
-- template: news-card, clean ou headline
-- headline: título
-- caption: legenda
-- handle: @usuário
-- logoSize: 40–260
-- mirror: true/false
-- speed: 0.5–2
+Baseado no caminho de upload que funcionou na V6.
 
-Saída: 720x1280 (9:16), H.264 + AAC.
+- `videos`: multipart com até 5 arquivos de vídeo.
+- `watermarkData`: marca d'água opcional enviada como Data URL (JPG/PNG/WebP).
+- Renderização 9:16 em FFmpeg nativo.
+- Título, legenda, @, velocidade e espelhamento.
+
+## Deploy no Render
+Envie estes arquivos para o repositório conectado ao serviço Render e aguarde o deploy.
+
+`/health` deve retornar `version: v7.6`.
