@@ -12,7 +12,7 @@ const jobs=new Map();
 const MAX_FILES=5,MAX_FILE_SIZE=500*1024*1024,MAX_IMAGE_BYTES=10*1024*1024;
 const allowedExt=new Set(['.mp4','.mov','.webm','.mkv','.m4v','.avi']);
 const storage=multer.diskStorage({destination:(_r,_f,cb)=>cb(null,uploads),filename:(_r,f,cb)=>cb(null,`${uid()}-${path.basename(f.originalname||'video')}`)});
-const upload=multer({storage,limits:{fileSize:MAX_FILE_SIZE,files:MAX_FILES},fileFilter:(_r,f,cb)=>{const ext=path.extname(f.originalname||'').toLowerCase();if(allowedExt.has(ext)||/^video\//i.test(f.mimetype||'')||f.mimetype==='application/octet-stream')return cb(null,true);cb(new Error(`Formato de vídeo não reconhecido: ${f.originalname||'arquivo'}`));}});
+const upload=multer({storage,limits:{fileSize:MAX_FILE_SIZE,files:MAX_FILES,fieldSize:20*1024*1024},fileFilter:(_r,f,cb)=>{const ext=path.extname(f.originalname||'').toLowerCase();if(allowedExt.has(ext)||/^video\//i.test(f.mimetype||'')||f.mimetype==='application/octet-stream')return cb(null,true);cb(new Error(`Formato de vídeo não reconhecido: ${f.originalname||'arquivo'}`));}});
 function uid(){return crypto.randomBytes(10).toString('hex')}
 function safeUnlink(p){try{if(p&&fs.existsSync(p))fs.unlinkSync(p)}catch(e){}}
 function esc(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/:/g,'\\:').replace(/,/g,'\\,').replace(/%/g,'\\%').replace(/\[/g,'\\[').replace(/\]/g,'\\]');}
